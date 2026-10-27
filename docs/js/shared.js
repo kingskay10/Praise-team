@@ -145,6 +145,7 @@
     document.querySelectorAll('[data-login-link]').forEach((link) => { link.hidden = Boolean(user); });
     document.querySelectorAll('[data-logout]').forEach((button) => {
       button.hidden = !user;
+      button.style.display = user ? '' : 'none';
       button.addEventListener('click', async () => {
         await supabase.auth.signOut();
         window.location.href = 'index.html';

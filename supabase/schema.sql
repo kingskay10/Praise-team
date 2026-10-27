@@ -152,6 +152,28 @@ create index reports_published_idx on public.department_reports(published, publi
 create index updates_published_idx on public.updates(published_at desc);
 create index gallery_photos_created_idx on public.gallery_photos(created_at desc);
 
+-- Public-safe projections avoid granting anonymous access to member profiles.
+create view public.daily_verses_public with (security_invoker = false) as
+  select dv.id, dv.verse_text, dv.posted_on, dv.created_at, p.name as member_name
+  from public.daily_verses dv
+  join public.profiles p on p.id = dv.member_id
+  where dv.posted_on = current_date;
+
+create view public.updates_public with (security_invoker = false) as
+  select u.id, u.title, u.content, u.published_at, u.created_at, p.name as author_name
+  from public.updates u
+  join public.profiles p on p.id = u.author_id
+  where u.published_at is not null;
+
+create view public.events_public with (security_invoker = false) as
+  select id, title, description, event_date, location, poster_path, attachment_path, created_at, updated_at
+  from public.events;
+
+create view public.department_reports_public with (security_invoker = false) as
+  select id, department, title, summary, content, status, published, published_at, created_at, updated_at
+  from public.department_reports
+  where published = true and status = 'published';
+
 create function public.current_app_role()
 returns public.app_role
 language sql stable security definer
@@ -197,8 +219,11 @@ alter table public.gallery_comment_likes enable row level security;
 alter table public.daily_verses enable row level security;
 
 grant usage on schema public to anon, authenticated;
-grant select on public.events, public.updates, public.department_reports, public.daily_verses to anon, authenticated;
+grant select on public.events, public.department_reports, public.updates, public.daily_verses to authenticated;
+grant select on public.events_public, public.department_reports_public, public.daily_verses_public, public.updates_public to anon, authenticated;
 grant select, insert, update, delete on public.profiles, public.roles, public.events, public.updates, public.finance_records, public.department_reports, public.department_music, public.department_band, public.member_photos, public.gallery_photos, public.gallery_photo_likes, public.gallery_comments, public.gallery_comment_likes, public.daily_verses to authenticated;
+revoke insert, update, delete on public.profiles from authenticated;
+grant update (name, marital_status, phone, social_media, location, position, photo_path) on public.profiles to authenticated;
 
 -- Profiles: members can read the team directory; only the chair edits other profiles.
 create policy "team can read profiles" on public.profiles for select to authenticated using (public.is_team_member());
@@ -240,6 +265,7 @@ create policy "band director deletes own band plans" on public.department_band f
 -- Personal photos are private to the owner, except shared gallery views for team members.
 create policy "team reads gallery photos" on public.gallery_photos for select to authenticated using (public.is_team_member());
 create policy "member creates own gallery photos" on public.gallery_photos for insert to authenticated with check (uploader_id = auth.uid() and source_type = 'member');
+create policy "chair adds own event posters to gallery" on public.gallery_photos for insert to authenticated with check (uploader_id = auth.uid() and source_type = 'event' and public.current_app_role() = 'chair' and exists (select 1 from public.events where id = source_id and created_by = auth.uid()));
 create policy "member edits own gallery photos" on public.gallery_photos for update to authenticated using (uploader_id = auth.uid()) with check (uploader_id = auth.uid());
 create policy "member deletes own gallery photos" on public.gallery_photos for delete to authenticated using (uploader_id = auth.uid());
 create policy "member manages own photos" on public.member_photos for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());

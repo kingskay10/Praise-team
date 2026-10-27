@@ -61,20 +61,19 @@
     if (!supabase) return;
     const verseTarget = document.getElementById('daily-verse');
     const today = localDate();
-    const { data: verses, error: verseError } = await supabase.from('daily_verses').select('verse_text,member_id,created_at').eq('posted_on', today).order('created_at', { ascending: false }).limit(1);
+    const { data: verses, error: verseError } = await supabase.from('daily_verses_public').select('verse_text,member_name,created_at').eq('posted_on', today).order('created_at', { ascending: false }).limit(1);
     if (verseError) fail(verseError);
     else if (!verses?.length) showEmpty(verseTarget, 'No verse has been posted for today yet.');
     else {
-      const names = await profileNameMap([verses[0].member_id]);
-      verseTarget.innerHTML = `<blockquote class="verse-quote">${e(verses[0].verse_text)}</blockquote><p class="verse-attribution"><strong>Posted by</strong> ${e(names[verses[0].member_id] || 'Team member')}</p>`;
+      verseTarget.innerHTML = `<blockquote class="verse-quote">${e(verses[0].verse_text)}</blockquote><p class="verse-attribution"><strong>Posted by</strong> ${e(verses[0].member_name || 'Team member')}</p>`;
     }
 
     const now = new Date().toISOString();
     const [upcoming, past, updates, reports] = await Promise.all([
-      supabase.from('events').select('*').gte('event_date', now).order('event_date').limit(3),
-      supabase.from('events').select('*').lt('event_date', now).order('event_date', { ascending: false }).limit(3),
-      supabase.from('updates').select('title,content,author_id,published_at,created_at').not('published_at', 'is', null).order('published_at', { ascending: false }).order('created_at', { ascending: false }).limit(5),
-      supabase.from('department_reports').select('department,title,summary,updated_at,created_at').eq('published', true).eq('status', 'published').order('published_at', { ascending: false }).order('created_at', { ascending: false }).limit(6)
+      supabase.from('events_public').select('*').gte('event_date', now).order('event_date').limit(3),
+      supabase.from('events_public').select('*').lt('event_date', now).order('event_date', { ascending: false }).limit(3),
+      supabase.from('updates_public').select('title,content,author_name,published_at,created_at').order('published_at', { ascending: false }).order('created_at', { ascending: false }).limit(5),
+      supabase.from('department_reports_public').select('department,title,summary,updated_at,created_at').order('published_at', { ascending: false }).order('created_at', { ascending: false }).limit(6)
     ]);
     for (const result of [upcoming, past, updates, reports]) if (result.error) fail(result.error);
     await renderEventList(document.getElementById('upcoming-events'), upcoming.data || []);
@@ -83,8 +82,7 @@
     const updateTarget = document.getElementById('latest-updates');
     if (!updates.data?.length) showEmpty(updateTarget, 'No updates published yet.');
     else {
-      const authors = await profileNameMap(updates.data.map((item) => item.author_id));
-      updateTarget.innerHTML = `<ul class="meta-list">${updates.data.map((item) => `<li><strong>${e(item.title)}</strong><br><small>By ${e(authors[item.author_id] || 'Team member')}</small><br>${e(item.content)}</li>`).join('')}</ul>`;
+      updateTarget.innerHTML = `<ul class="meta-list">${updates.data.map((item) => `<li><strong>${e(item.title)}</strong><br><small>By ${e(item.author_name || 'Team member')}</small><br>${e(item.content)}</li>`).join('')}</ul>`;
     }
     const reportTarget = document.getElementById('published-reports');
     reportTarget.innerHTML = reports.data?.length ? reports.data.map(reportMarkup).join('') : '<p class="empty-state">No published reports yet.</p>';
@@ -129,8 +127,9 @@
   async function loadChair() {
     const session = await guard('chair');
     if (!session) return;
+    document.getElementById('profile-form').closest('.card').querySelector('h2').textContent = 'Edit Member Profile';
     const [membersResult, reportsResult] = await Promise.all([
-      supabase.from('profiles').select('id,name,email,phone,location,role:roles(role)').order('name'),
+      supabase.from('profiles').select('id,name,email,phone,location,position,social_media,marital_status,role:roles(role)').order('name'),
       supabase.from('department_reports').select('*').order('created_at', { ascending: false })
     ]);
     if (membersResult.error) fail(membersResult.error);
@@ -141,7 +140,8 @@
       const member = membersResult.data.find((item) => item.id === button.dataset.editMember);
       if (!member) return;
       const form = document.getElementById('profile-form');
-      for (const key of ['id', 'name', 'email', 'phone', 'location']) form.elements[key].value = member[key] || '';
+      for (const key of ['id', 'name', 'email', 'phone', 'location', 'position', 'social_media', 'marital_status']) form.elements[key].value = member[key] || '';
+      form.elements.email.readOnly = true;
       form.elements.role.value = member.role?.role || 'member';
       form.scrollIntoView({ behavior: 'smooth' });
     }));
@@ -150,7 +150,11 @@
     reportTarget.innerHTML = (reportsResult.data || []).map((report) => `<tr><td>${e(roleLabel(report.department))}</td><td>${e(report.title)}</td><td><span class="badge ${report.published ? 'published' : 'draft'}">${e(report.published ? 'Published' : report.status)}</span></td><td>${report.status === 'pending' && !report.published ? `<button type="button" class="btn btn-success" data-publish-report="${e(report.id)}">Approve &amp; Publish</button>` : report.published ? 'Live' : 'Waiting'}</td></tr>`).join('');
     document.querySelectorAll('[data-publish-report]').forEach((button) => button.addEventListener('click', async () => {
       const { error } = await supabase.from('department_reports').update({ published: true, status: 'published', published_at: new Date().toISOString() }).eq('id', button.dataset.publishReport);
-      if (error) fail(error); else { showStatus('Report published.', 'success'); await loadChair(); }
+      if (error) return fail(error);
+      button.closest('tr').querySelector('.badge').textContent = 'Published';
+      button.closest('tr').querySelector('.badge').classList.add('published');
+      button.closest('td').textContent = 'Live';
+      showStatus('Report published.', 'success');
     }));
 
     document.getElementById('profile-form')?.addEventListener('submit', async (event) => {
@@ -158,7 +162,15 @@
       const values = formData(event.currentTarget);
       const userId = values.id || null;
       if (!userId) return showStatus('Create the account in Supabase Authentication first, then edit its profile here.', 'info');
-      const { role, ...profile } = values;
+      const { role } = values;
+      const profile = {
+        name: values.name,
+        phone: values.phone || null,
+        location: values.location || null,
+        position: values.position || null,
+        social_media: values.social_media || null,
+        marital_status: values.marital_status || null
+      };
       const { error: profileError } = await supabase.from('profiles').update(profile).eq('id', userId);
       if (profileError) return fail(profileError);
       const { error: roleError } = await supabase.from('roles').upsert({ user_id: userId, role });
@@ -178,6 +190,10 @@
       for (const [field, output] of [['poster', 'posterPath'], ['attachment', 'attachmentPath']]) {
         const file = form.elements[field].files[0];
         if (!file) continue;
+        const validType = field === 'poster'
+          ? ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
+          : ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.type);
+        if (!validType) return showStatus(`Choose a valid ${field} file type.`, 'danger');
         const uploaded = await uploadFile('event-media', file, session.user.id, `event-${data.id}`);
         if (uploaded.error) return showStatus(uploaded.error, 'danger');
         if (output === 'posterPath') posterPath = uploaded.path; else attachmentPath = uploaded.path;
@@ -185,6 +201,10 @@
       if (posterPath || attachmentPath) {
         const { error: updateError } = await supabase.from('events').update({ poster_path: posterPath, attachment_path: attachmentPath }).eq('id', data.id);
         if (updateError) return fail(updateError);
+      }
+      if (posterPath) {
+        const { error: galleryError } = await supabase.from('gallery_photos').insert({ uploader_id: session.user.id, source_type: 'event', source_id: data.id, image_path: posterPath, caption: values.title });
+        if (galleryError) return fail(galleryError);
       }
       form.reset();
       showStatus('Event created.', 'success');
@@ -284,7 +304,7 @@
       const { error: saveError } = await supabase.from('profiles').update({ name: values.name, position: values.position || null, phone: values.phone || null, location: values.location || null, social_media: values.social_media || null, marital_status: values.marital_status || null }).eq('id', session.user.id);
       if (saveError) return fail(saveError);
       showStatus('Profile saved.', 'success');
-      await loadMember();
+      document.querySelector('#profile-view p strong').textContent = values.name;
     });
     document.getElementById('profile-photo-form')?.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -295,19 +315,19 @@
       if (saveError) return fail(saveError);
       await supabase.from('gallery_photos').insert({ uploader_id: session.user.id, source_type: 'member', source_id: session.user.id, image_path: uploaded.path, caption: 'Profile photo' });
       showStatus('Profile picture updated.', 'success');
-      await loadMember();
+      const photoUrl = await signedUrl('member-media', uploaded.path);
+      document.getElementById('profile-view').innerHTML = `<img src="${e(photoUrl)}" alt="Profile photo" class="profile-avatar"><p><strong>${e(profile.name)}</strong></p><p>${e(roleLabel(session.role))}</p>`;
     });
 
     const [events, updates, reports, photos] = await Promise.all([
-      supabase.from('events').select('*').gte('event_date', new Date().toISOString()).order('event_date').limit(5),
-      supabase.from('updates').select('title,content,author_id,published_at').not('published_at', 'is', null).order('published_at', { ascending: false }).limit(5),
-      supabase.from('department_reports').select('*').eq('published', true).eq('status', 'published').order('published_at', { ascending: false }).limit(5),
+      supabase.from('events_public').select('*').gte('event_date', new Date().toISOString()).order('event_date').limit(5),
+      supabase.from('updates_public').select('title,content,author_name,published_at').order('published_at', { ascending: false }).limit(5),
+      supabase.from('department_reports_public').select('*').order('published_at', { ascending: false }).limit(5),
       supabase.from('member_photos').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false })
     ]);
     for (const result of [events, updates, reports, photos]) if (result.error) fail(result.error);
     await renderEventList(document.getElementById('member-events'), events.data || [], true);
-    const authorMap = await profileNameMap((updates.data || []).map((item) => item.author_id));
-    document.getElementById('member-updates').innerHTML = (updates.data || []).map((item) => `<article><strong>${e(item.title)}</strong><br><small>By ${e(authorMap[item.author_id] || 'Team member')}</small><p>${e(item.content)}</p></article>`).join('') || '<p class="empty-state">No published updates.</p>';
+    document.getElementById('member-updates').innerHTML = (updates.data || []).map((item) => `<article><strong>${e(item.title)}</strong><br><small>By ${e(item.author_name || 'Team member')}</small><p>${e(item.content)}</p></article>`).join('') || '<p class="empty-state">No published updates.</p>';
     document.getElementById('member-reports').innerHTML = (reports.data || []).map(reportMarkup).join('') || '<p class="empty-state">No published reports.</p>';
     const photoMarkup = await Promise.all((photos.data || []).map(async (item) => {
       const url = await signedUrl('member-media', item.image_path);
@@ -333,7 +353,12 @@
       const { error: galleryError } = await supabase.from('gallery_photos').insert({ uploader_id: session.user.id, source_type: 'member', source_id: session.user.id, image_path: uploaded.path, caption: 'Member photo' });
       if (galleryError) return fail(galleryError);
       showStatus('Photo added to your gallery.', 'success');
-      await loadMember();
+      event.currentTarget.reset();
+      const photoUrl = await signedUrl('member-media', uploaded.path);
+      const photoItem = document.createElement('div');
+      photoItem.className = 'gallery-item';
+      photoItem.innerHTML = `<img src="${e(photoUrl)}" alt="Your uploaded photo">`;
+      document.getElementById('personal-photos').prepend(photoItem);
     });
   }
 
@@ -359,11 +384,11 @@
     window.__commentLikes = commentLikes.filter((like) => like.user_id === session.user.id).map((like) => like.comment_id);
     const commentAuthors = await profileNameMap(comments.map((comment) => comment.user_id));
     const cards = await Promise.all(photos.map(async (photo) => {
-      const url = await signedUrl('member-media', photo.image_path);
+      const url = await signedUrl(photo.source_type === 'event' ? 'event-media' : 'member-media', photo.image_path);
       if (!url) return '';
       const photoComments = comments.filter((item) => item.photo_id === photo.id);
       const topLevel = photoComments.filter((item) => !item.parent_comment_id);
-      return `<article class="gallery-card"><img class="gallery-photo" src="${e(url)}" alt="${e(photo.caption || 'Gallery photo')}"><div class="gallery-body"><div class="gallery-meta-row"><div><strong>${e(authors[photo.uploader_id] || 'Team member')}</strong><br><small>${e(dateTime(photo.created_at))}</small></div><div class="gallery-share-wrap"><button type="button" class="small-link" data-share="${e(url)}">Share</button><button type="button" class="small-link" data-copy="${e(url)}">Copy link</button></div></div>${photo.caption ? `<p class="gallery-caption">${e(photo.caption)}</p>` : ''}<div class="gallery-actions"><button class="btn btn-secondary" type="button" data-like-photo="${e(photo.id)}">${likes.some((like) => like.photo_id === photo.id && like.user_id === session.user.id) ? 'Unlike' : 'Like'}</button><span>${likes.filter((like) => like.photo_id === photo.id).length} likes</span></div><div class="comments-box"><h3>Comments (${photoComments.length})</h3>${topLevel.map((comment) => `<div class="comment-item"><div class="comment-header"><strong>${e(commentAuthors[comment.user_id] || 'Team member')}</strong><small>${e(dateTime(comment.created_at))}</small></div><p>${e(comment.comment)}</p><button class="small-link" type="button" data-like-comment="${e(comment.id)}">${likesResult.data ? '' : ''}${likesResult.data && ''}${(window.__commentLikes || []).includes(comment.id) ? 'Unlike' : 'Like comment'}</button>${photoComments.filter((reply) => reply.parent_comment_id === comment.id).map((reply) => `<div class="reply-item"><strong>${e(commentAuthors[reply.user_id] || 'Team member')}</strong><p>${e(reply.comment)}</p></div>`).join('')}<form class="reply-form" data-reply-form="${e(photo.id)}" data-parent-id="${e(comment.id)}"><textarea name="reply" rows="2" placeholder="Write a reply..." required></textarea><button type="submit" class="btn btn-primary">Reply</button></form></div>`).join('') || '<p class="empty-state">No comments yet.</p>'}<form class="comment-form" data-comment-form="${e(photo.id)}"><textarea name="comment" rows="2" placeholder="Write a comment..." required></textarea><button type="submit" class="btn btn-primary">Comment</button></form></div></div></article>`;
+      return `<article class="gallery-card"><img class="gallery-photo" src="${e(url)}" alt="${e(photo.caption || 'Gallery photo')}"><div class="gallery-body"><div class="gallery-meta-row"><div><strong>${e(authors[photo.uploader_id] || 'Team member')}</strong><br><small>${e(dateTime(photo.created_at))}</small></div><div class="gallery-share-wrap"><button type="button" class="small-link" data-share="${e(url)}">Share</button><button type="button" class="small-link" data-copy="${e(url)}">Copy link</button></div></div>${photo.caption ? `<p class="gallery-caption">${e(photo.caption)}</p>` : ''}<div class="gallery-actions"><button class="btn btn-secondary" type="button" data-like-photo="${e(photo.id)}">${likes.some((like) => like.photo_id === photo.id && like.user_id === session.user.id) ? 'Unlike' : 'Like'}</button><span>${likes.filter((like) => like.photo_id === photo.id).length} likes</span></div><div class="comments-box"><h3>Comments (${photoComments.length})</h3>${topLevel.map((comment) => `<div class="comment-item"><div class="comment-header"><strong>${e(commentAuthors[comment.user_id] || 'Team member')}</strong><small>${e(dateTime(comment.created_at))}</small></div><p>${e(comment.comment)}</p><button class="small-link" type="button" data-like-comment="${e(comment.id)}">${commentLikes.some((like) => like.comment_id === comment.id && like.user_id === session.user.id) ? 'Unlike' : `Like (${commentLikes.filter((like) => like.comment_id === comment.id).length})`}</button>${photoComments.filter((reply) => reply.parent_comment_id === comment.id).map((reply) => `<div class="reply-item"><strong>${e(commentAuthors[reply.user_id] || 'Team member')}</strong><p>${e(reply.comment)}</p></div>`).join('')}<form class="reply-form" data-reply-form="${e(photo.id)}" data-parent-id="${e(comment.id)}"><textarea name="reply" rows="2" placeholder="Write a reply..." required></textarea><button type="submit" class="btn btn-primary">Reply</button></form></div>`).join('') || '<p class="empty-state">No comments yet.</p>'}<form class="comment-form" data-comment-form="${e(photo.id)}"><textarea name="comment" rows="2" placeholder="Write a comment..." required></textarea><button type="submit" class="btn btn-primary">Comment</button></form></div></div></article>`;
     }));
     target.innerHTML = cards.join('');
     const bindToggle = async (table, key, button) => {
@@ -424,9 +449,9 @@
       const value = escapeQuery(normalized);
       const pattern = `%${value}%`;
       const [events, updates, reports] = await Promise.all([
-        supabase.from('events').select('title,description,event_date').or(`title.ilike.${pattern},description.ilike.${pattern}`).limit(30),
+        supabase.from('events_public').select('title,description,event_date').or(`title.ilike.${pattern},description.ilike.${pattern}`).limit(30),
         supabase.from('updates').select('title,content,published_at').not('published_at', 'is', null).or(`title.ilike.${pattern},content.ilike.${pattern}`).limit(30),
-        supabase.from('department_reports').select('title,summary,published_at').eq('published', true).eq('status', 'published').or(`title.ilike.${pattern},summary.ilike.${pattern}`).limit(30)
+        supabase.from('department_reports_public').select('title,summary,published_at').or(`title.ilike.${pattern},summary.ilike.${pattern}`).limit(30)
       ]);
       for (const result of [events, updates, reports]) if (result.error) fail(result.error);
       const merged = [
