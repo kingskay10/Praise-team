@@ -63,10 +63,11 @@
     const { error } = await supabase.storage.from(bucket).upload(path, file, { upsert: false, contentType: file.type });
     return error ? { path: null, error: 'File upload failed. Check your account permissions and bucket settings.' } : { path, error: null };
   };
-  const escapeQuery = (value) => value.replace(/[%_,]/g, ' ').trim();
+  const escapeQuery = (value) => value.replace(/[^\p{L}\p{N}\s'-]/gu, ' ').trim();
 
   const header = document.getElementById('site-header');
   if (header) {
+    header.insertAdjacentHTML('beforebegin', '<div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>');
     header.innerHTML = `
       <header class="topbar" id="site-header-inner">
         <a href="index.html" class="brand">ST ANDREWS CCAP PRAISE TEAM</a>

@@ -222,14 +222,20 @@ create policy "secretary manages finance" on public.finance_records for all to a
 
 -- Reports: public sees only published reports; each department owns its drafts; chair reviews and publishes.
 create policy "public reads published reports" on public.department_reports for select to anon, authenticated using (published = true and status = 'published');
-create policy "department reads own reports" on public.department_reports for select to authenticated using (created_by = auth.uid() or public.current_app_role() = 'chair');
+create policy "department reads own reports" on public.department_reports for select to authenticated using (department = public.current_app_role() or public.current_app_role() = 'chair');
 create policy "department creates own reports" on public.department_reports for insert to authenticated with check (created_by = auth.uid() and department = public.current_app_role() and department in ('secretary', 'music_director', 'band_director') and not published and status in ('draft', 'pending'));
 create policy "department edits own unpublished reports" on public.department_reports for update to authenticated using (created_by = auth.uid() and department = public.current_app_role() and not published) with check (created_by = auth.uid() and department = public.current_app_role() and not published and status in ('draft', 'pending'));
 create policy "chair publishes reports" on public.department_reports for update to authenticated using (public.current_app_role() = 'chair') with check (public.current_app_role() = 'chair' and ((published and status = 'published') or (not published and status in ('draft', 'pending'))));
 
 -- Department plans are visible and writable only to their owning director.
-create policy "music director manages music plans" on public.department_music for all to authenticated using (public.current_app_role() = 'music_director' and created_by = auth.uid()) with check (public.current_app_role() = 'music_director' and created_by = auth.uid());
-create policy "band director manages band plans" on public.department_band for all to authenticated using (public.current_app_role() = 'band_director' and created_by = auth.uid()) with check (public.current_app_role() = 'band_director' and created_by = auth.uid());
+create policy "music director reads music plans" on public.department_music for select to authenticated using (public.current_app_role() = 'music_director');
+create policy "music director creates music plans" on public.department_music for insert to authenticated with check (public.current_app_role() = 'music_director' and created_by = auth.uid());
+create policy "music director edits own music plans" on public.department_music for update to authenticated using (public.current_app_role() = 'music_director' and created_by = auth.uid()) with check (public.current_app_role() = 'music_director' and created_by = auth.uid());
+create policy "music director deletes own music plans" on public.department_music for delete to authenticated using (public.current_app_role() = 'music_director' and created_by = auth.uid());
+create policy "band director reads band plans" on public.department_band for select to authenticated using (public.current_app_role() = 'band_director');
+create policy "band director creates band plans" on public.department_band for insert to authenticated with check (public.current_app_role() = 'band_director' and created_by = auth.uid());
+create policy "band director edits own band plans" on public.department_band for update to authenticated using (public.current_app_role() = 'band_director' and created_by = auth.uid()) with check (public.current_app_role() = 'band_director' and created_by = auth.uid());
+create policy "band director deletes own band plans" on public.department_band for delete to authenticated using (public.current_app_role() = 'band_director' and created_by = auth.uid());
 
 -- Personal photos are private to the owner, except shared gallery views for team members.
 create policy "team reads gallery photos" on public.gallery_photos for select to authenticated using (public.is_team_member());
