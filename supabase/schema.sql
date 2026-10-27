@@ -2,7 +2,7 @@
 -- Run in the Supabase SQL editor. Never expose a service-role key to the browser.
 create extension if not exists pgcrypto;
 
-create type public.app_role as enum ('chair', 'secretary', 'music_director', 'band_director', 'member');
+create type public.app_role as enum ('chair', 'secretary', 'music_director', 'band_director', 'prayer_director', 'member');
 create type public.report_status as enum ('draft', 'pending', 'published');
 create type public.gallery_source_type as enum ('member', 'event');
 
@@ -146,11 +146,20 @@ create table public.daily_verses (
   created_at timestamptz not null default now()
 );
 
+create table public.daily_prayer_points (
+  id uuid primary key default gen_random_uuid(),
+  prayer_point text not null,
+  prayer_date date not null default current_date,
+  created_by uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
 create index events_event_date_idx on public.events(event_date);
 create index finance_member_month_idx on public.finance_records(member_id, month);
 create index reports_published_idx on public.department_reports(published, published_at desc);
 create index updates_published_idx on public.updates(published_at desc);
 create index gallery_photos_created_idx on public.gallery_photos(created_at desc);
+create index daily_prayer_points_date_idx on public.daily_prayer_points(prayer_date, created_at desc);
 
 -- Public-safe projections avoid granting anonymous access to member profiles.
 create view public.daily_verses_public with (security_invoker = false) as
@@ -158,6 +167,11 @@ create view public.daily_verses_public with (security_invoker = false) as
   from public.daily_verses dv
   join public.profiles p on p.id = dv.member_id
   where dv.posted_on = current_date;
+
+create view public.daily_prayer_points_public with (security_invoker = false) as
+  select id, prayer_point, prayer_date, created_at
+  from public.daily_prayer_points
+  where prayer_date = current_date;
 
 create view public.updates_public with (security_invoker = false) as
   select u.id, u.title, u.content, u.published_at, u.created_at, p.name as author_name
@@ -217,11 +231,13 @@ alter table public.gallery_photo_likes enable row level security;
 alter table public.gallery_comments enable row level security;
 alter table public.gallery_comment_likes enable row level security;
 alter table public.daily_verses enable row level security;
+alter table public.daily_prayer_points enable row level security;
 
 grant usage on schema public to anon, authenticated;
 grant select on public.events, public.department_reports, public.updates, public.daily_verses to authenticated;
-grant select on public.events_public, public.department_reports_public, public.daily_verses_public, public.updates_public to anon, authenticated;
-grant select, insert, update, delete on public.profiles, public.roles, public.events, public.updates, public.finance_records, public.department_reports, public.department_music, public.department_band, public.member_photos, public.gallery_photos, public.gallery_photo_likes, public.gallery_comments, public.gallery_comment_likes, public.daily_verses to authenticated;
+grant select on public.daily_prayer_points to authenticated;
+grant select on public.events_public, public.department_reports_public, public.daily_verses_public, public.daily_prayer_points_public, public.updates_public to anon, authenticated;
+grant select, insert, update, delete on public.profiles, public.roles, public.events, public.updates, public.finance_records, public.department_reports, public.department_music, public.department_band, public.member_photos, public.gallery_photos, public.gallery_photo_likes, public.gallery_comments, public.gallery_comment_likes, public.daily_verses, public.daily_prayer_points to authenticated;
 revoke insert, update, delete on public.profiles from authenticated;
 grant update (name, marital_status, phone, social_media, location, position, photo_path) on public.profiles to authenticated;
 
@@ -282,9 +298,14 @@ create policy "member manages own comment likes" on public.gallery_comment_likes
 
 -- The current daily verse is public. Members can submit their own verse.
 create policy "public reads daily verses" on public.daily_verses for select to anon, authenticated using (posted_on = current_date);
-create policy "member creates own verses" on public.daily_verses for insert to authenticated with check (member_id = auth.uid());
-create policy "member edits own verses" on public.daily_verses for update to authenticated using (member_id = auth.uid()) with check (member_id = auth.uid());
-create policy "member deletes own verses" on public.daily_verses for delete to authenticated using (member_id = auth.uid());
+create policy "prayer director reads verses" on public.daily_verses for select to authenticated using (public.current_app_role() = 'prayer_director');
+create policy "prayer director creates verses" on public.daily_verses for insert to authenticated with check (member_id = auth.uid() and public.current_app_role() = 'prayer_director');
+create policy "prayer director edits own verses" on public.daily_verses for update to authenticated using (member_id = auth.uid() and public.current_app_role() = 'prayer_director') with check (member_id = auth.uid() and public.current_app_role() = 'prayer_director');
+create policy "prayer director deletes own verses" on public.daily_verses for delete to authenticated using (member_id = auth.uid() and public.current_app_role() = 'prayer_director');
+create policy "prayer director reads own prayer points" on public.daily_prayer_points for select to authenticated using (public.current_app_role() = 'prayer_director');
+create policy "prayer director creates own prayer points" on public.daily_prayer_points for insert to authenticated with check (created_by = auth.uid() and public.current_app_role() = 'prayer_director');
+create policy "prayer director edits own prayer points" on public.daily_prayer_points for update to authenticated using (created_by = auth.uid() and public.current_app_role() = 'prayer_director') with check (created_by = auth.uid() and public.current_app_role() = 'prayer_director');
+create policy "prayer director deletes own prayer points" on public.daily_prayer_points for delete to authenticated using (created_by = auth.uid() and public.current_app_role() = 'prayer_director');
 
 -- Storage buckets (create matching buckets in Dashboard, or run these statements once).
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)

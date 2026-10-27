@@ -16,6 +16,7 @@
     secretary: 'Secretary',
     music_director: 'Music Director',
     band_director: 'Band/Worship Director',
+    prayer_director: 'Prayer Director',
     member: 'Member'
   };
   const roleLabel = (role) => roleLabels[role] || 'Member';
@@ -75,6 +76,7 @@
         <nav class="topnav" id="siteNav" aria-label="Main navigation">
           <a href="index.html">Home</a>
           <a href="members.html" data-member-link hidden>Members</a>
+          <a href="chair-members.html" data-chair-link hidden>Manage Members</a>
           <a href="gallery.html" data-member-link hidden>Gallery</a>
           <a href="dashboard.html" data-member-link hidden>Dashboard</a>
           <a href="login.html" data-login-link>Login</a>
@@ -142,6 +144,7 @@
 
     const { user, role } = await getSession();
     document.querySelectorAll('[data-member-link]').forEach((link) => { link.hidden = !user; });
+    document.querySelectorAll('[data-chair-link]').forEach((link) => { link.hidden = role !== 'chair'; });
     document.querySelectorAll('[data-login-link]').forEach((link) => { link.hidden = Boolean(user); });
     document.querySelectorAll('[data-logout]').forEach((button) => {
       button.hidden = !user;

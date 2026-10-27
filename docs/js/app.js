@@ -22,7 +22,7 @@
   };
   const redirectForRole = (role) => ({
     chair: 'chair.html', secretary: 'secretary.html', music_director: 'music-director.html',
-    band_director: 'band-director.html', member: 'member.html'
+    band_director: 'band-director.html', prayer_director: 'prayer-director.html', member: 'member.html'
   })[role] || 'login.html';
   const guard = async (requiredRole) => {
     if (!supabase) return null;
@@ -69,13 +69,14 @@
     }
 
     const now = new Date().toISOString();
-    const [upcoming, past, updates, reports] = await Promise.all([
+    const [upcoming, past, updates, reports, prayerPoints] = await Promise.all([
       supabase.from('events_public').select('*').gte('event_date', now).order('event_date').limit(3),
       supabase.from('events_public').select('*').lt('event_date', now).order('event_date', { ascending: false }).limit(3),
       supabase.from('updates_public').select('title,content,author_name,published_at,created_at').order('published_at', { ascending: false }).order('created_at', { ascending: false }).limit(5),
-      supabase.from('department_reports_public').select('department,title,summary,updated_at,created_at').order('published_at', { ascending: false }).order('created_at', { ascending: false }).limit(6)
+      supabase.from('department_reports_public').select('department,title,summary,updated_at,created_at').order('published_at', { ascending: false }).order('created_at', { ascending: false }).limit(6),
+      supabase.from('daily_prayer_points_public').select('id,prayer_point,created_at').eq('prayer_date', today).order('created_at', { ascending: false })
     ]);
-    for (const result of [upcoming, past, updates, reports]) if (result.error) fail(result.error);
+    for (const result of [upcoming, past, updates, reports, prayerPoints]) if (result.error) fail(result.error);
     await renderEventList(document.getElementById('upcoming-events'), upcoming.data || []);
     await renderEventList(document.getElementById('past-events'), past.data || [], true);
 
@@ -86,6 +87,10 @@
     }
     const reportTarget = document.getElementById('published-reports');
     reportTarget.innerHTML = reports.data?.length ? reports.data.map(reportMarkup).join('') : '<p class="empty-state">No published reports yet.</p>';
+    const prayerTarget = document.getElementById('daily-prayer-points');
+    if (prayerTarget) prayerTarget.innerHTML = prayerPoints.data?.length
+      ? `<ul class="meta-list">${prayerPoints.data.map((item) => `<li>${e(item.prayer_point)}</li>`).join('')}</ul>`
+      : '<p class="empty-state">No prayer points have been posted for today.</p>';
   }
 
   async function handleLogin() {
@@ -109,6 +114,28 @@
     window.location.replace('index.html');
   }
 
+  async function handleSetPassword() {
+    const form = document.getElementById('set-password-form');
+    if (!form || !supabase) return;
+    const { user } = await getSession();
+    if (!user) {
+      showStatus('Open the invitation link from your email to set your password.', 'danger');
+      form.hidden = true;
+      return;
+    }
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const values = formData(form);
+      if (values.password.length < 12 || values.password !== values.confirm_password) {
+        return showStatus('Use at least 12 characters and make both passwords match.', 'danger');
+      }
+      const { error } = await supabase.auth.updateUser({ password: values.password });
+      if (error) return showStatus(error.message, 'danger');
+      const { data: roleRecord } = await supabase.from('roles').select('role').eq('user_id', user.id).maybeSingle();
+      window.location.replace(redirectForRole(roleRecord?.role || 'member'));
+    });
+  }
+
   async function loadMembers() {
     const session = await guard();
     if (!session) return;
@@ -127,7 +154,13 @@
   async function loadChair() {
     const session = await guard('chair');
     if (!session) return;
-    document.getElementById('profile-form').closest('.card').querySelector('h2').textContent = 'Edit Member Profile';
+    document.getElementById('profile-form').closest('.card').hidden = true;
+    document.getElementById('chair-members').closest('.card').hidden = true;
+    document.querySelector('.dash-header').insertAdjacentHTML('beforeend', '<a class="btn btn-primary" href="chair-members.html">Manage Members</a>');
+    const roleSelect = document.querySelector('#profile-form select[name="role"]');
+    if (roleSelect && !roleSelect.querySelector('option[value="prayer_director"]')) {
+      roleSelect.add(new Option('Prayer Director', 'prayer_director'));
+    }
     const [membersResult, reportsResult] = await Promise.all([
       supabase.from('profiles').select('id,name,email,phone,location,position,social_media,marital_status,role:roles(role)').order('name'),
       supabase.from('department_reports').select('*').order('created_at', { ascending: false })
@@ -219,6 +252,60 @@
     });
   }
 
+  async function loadChairMembers() {
+    const session = await guard('chair');
+    if (!session) return;
+    const target = document.getElementById('managed-members');
+    const renderMembers = async () => {
+      const { data: members, error } = await supabase.from('profiles')
+        .select('id,name,email,position,phone,location,social_media,marital_status,role:roles(role)').order('name');
+      if (error) throw error;
+      target.innerHTML = (members || []).map((member) => `<tr><td>${e(member.name)}</td><td>${e(member.email)}</td><td>${e(roleLabel(member.role?.role))}</td><td>${e(member.position || 'N/A')}</td><td>${e(member.phone || 'N/A')}</td><td><button class="small-link" type="button" data-edit-profile="${e(member.id)}">Edit</button></td></tr>`).join('');
+      document.querySelectorAll('[data-edit-profile]').forEach((button) => button.addEventListener('click', () => {
+        const member = members.find((item) => item.id === button.dataset.editProfile);
+        if (!member) return;
+        const form = document.getElementById('edit-member-form');
+        for (const key of ['id', 'name', 'email', 'position', 'phone', 'location', 'social_media', 'marital_status']) form.elements[key].value = member[key] || '';
+        form.elements.role.value = member.role?.role || 'member';
+        document.getElementById('edit-member-section').hidden = false;
+        form.scrollIntoView({ behavior: 'smooth' });
+      }));
+    };
+    try { await renderMembers(); } catch (error) { return fail(error, 'The member list could not be loaded.'); }
+
+    document.getElementById('invite-member-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const values = formData(event.currentTarget);
+      const { data, error: inviteError } = await supabase.functions.invoke('invite-member', { body: values });
+      if (inviteError) return fail(inviteError, 'Member invitation failed. Confirm the invite function is deployed and configured.');
+      if (data?.error) return showStatus(data.error, 'danger');
+      event.currentTarget.reset();
+      showStatus(data?.message || 'Invitation sent.', 'success');
+      try { await renderMembers(); } catch (error) { fail(error); }
+    });
+    document.getElementById('edit-member-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const values = formData(event.currentTarget);
+      const { error: profileError } = await supabase.from('profiles').update({
+        name: values.name,
+        position: values.position || null,
+        phone: values.phone || null,
+        location: values.location || null,
+        social_media: values.social_media || null,
+        marital_status: values.marital_status || null
+      }).eq('id', values.id);
+      if (profileError) return fail(profileError);
+      const { error: roleError } = await supabase.from('roles').upsert({ user_id: values.id, role: values.role });
+      if (roleError) return fail(roleError);
+      document.getElementById('edit-member-section').hidden = true;
+      showStatus('Member profile saved.', 'success');
+      try { await renderMembers(); } catch (error) { fail(error); }
+    });
+    document.getElementById('cancel-edit-member')?.addEventListener('click', () => {
+      document.getElementById('edit-member-section').hidden = true;
+    });
+  }
+
   async function loadSecretary() {
     const session = await guard('secretary');
     if (!session) return;
@@ -294,6 +381,11 @@
     if (!session) return;
     const { data: profile, error } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
     if (error) return fail(error);
+    const memberVerseForm = document.getElementById('verse-form');
+    if (memberVerseForm) {
+      memberVerseForm.hidden = true;
+      memberVerseForm.previousElementSibling.hidden = true;
+    }
     const form = document.getElementById('profile-edit-form');
     for (const key of ['name', 'position', 'phone', 'location', 'social_media', 'marital_status']) form.elements[key].value = profile[key] || '';
     const photo = await signedUrl('member-media', profile.photo_path);
@@ -335,14 +427,6 @@
     }));
     document.getElementById('personal-photos').innerHTML = photoMarkup.join('') || '<p class="empty-state">No extra photos uploaded yet.</p>';
 
-    document.getElementById('verse-form')?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const values = formData(event.currentTarget);
-      const { error: verseError } = await supabase.from('daily_verses').insert({ member_id: session.user.id, verse_text: values.verse_text, posted_on: localDate() });
-      if (verseError) return fail(verseError);
-      event.currentTarget.reset();
-      showStatus('Your verse was posted for today.', 'success');
-    });
     document.getElementById('member-gallery-form')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const file = event.currentTarget.elements.photo.files[0];
@@ -359,6 +443,47 @@
       photoItem.className = 'gallery-item';
       photoItem.innerHTML = `<img src="${e(photoUrl)}" alt="Your uploaded photo">`;
       document.getElementById('personal-photos').prepend(photoItem);
+    });
+  }
+
+  async function loadPrayerDirector() {
+    const session = await guard('prayer_director');
+    if (!session) return;
+    const today = localDate();
+    const verseTarget = document.getElementById('today-verse');
+    const pointTarget = document.getElementById('director-prayer-points');
+    const [verseResult, pointsResult] = await Promise.all([
+      supabase.from('daily_verses').select('verse_text').eq('posted_on', today).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('daily_prayer_points').select('id,prayer_point,created_at').eq('prayer_date', today).order('created_at', { ascending: false })
+    ]);
+    if (verseResult.error) fail(verseResult.error);
+    if (pointsResult.error) fail(pointsResult.error);
+    verseTarget.textContent = verseResult.data?.verse_text || 'No verse has been published for today.';
+    pointTarget.innerHTML = (pointsResult.data || []).map((item) => `<li>${e(item.prayer_point)}</li>`).join('') || '<li class="empty-state">No prayer points added yet.</li>';
+
+    document.getElementById('prayer-verse-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const values = formData(event.currentTarget);
+      const existing = await supabase.from('daily_verses').select('id').eq('posted_on', today).limit(1).maybeSingle();
+      if (existing.error) return fail(existing.error);
+      const result = existing.data
+        ? await supabase.from('daily_verses').update({ verse_text: values.verse_text }).eq('id', existing.data.id)
+        : await supabase.from('daily_verses').insert({ member_id: session.user.id, verse_text: values.verse_text, posted_on: today });
+      if (result.error) return fail(result.error);
+      verseTarget.textContent = values.verse_text;
+      event.currentTarget.reset();
+      showStatus('Today's verse has been published.', 'success');
+    });
+    document.getElementById('prayer-point-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const values = formData(event.currentTarget);
+      const { data, error } = await supabase.from('daily_prayer_points').insert({ prayer_point: values.prayer_point, prayer_date: today, created_by: session.user.id }).select('id,prayer_point').single();
+      if (error) return fail(error);
+      const item = document.createElement('li');
+      item.textContent = data.prayer_point;
+      pointTarget.prepend(item);
+      event.currentTarget.reset();
+      showStatus('Prayer point added.', 'success');
     });
   }
 
@@ -485,13 +610,16 @@
     home: loadHome,
     login: handleLogin,
     logout: handleLogout,
+    'set-password': handleSetPassword,
     dashboard: async () => { const session = await guard(); if (session) window.location.replace(redirectForRole(session.role)); },
     members: loadMembers,
     chair: loadChair,
+    'chair-members': loadChairMembers,
     secretary: loadSecretary,
     'music-director': loadMusicDirector,
     'band-director': loadBandDirector,
     member: loadMember,
+    'prayer-director': loadPrayerDirector,
     gallery: async () => { await handleGalleryUpload(); await loadGallery(); },
     search: loadSearch,
     'member-gallery': loadMemberGallery,
