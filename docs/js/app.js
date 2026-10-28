@@ -95,17 +95,19 @@
 
   async function handleLogin() {
     const form = document.getElementById('login-form');
-    if (!form || !supabase) return;
-    const session = await getSession();
-    if (session.user) return window.location.replace(redirectForRole(session.role));
+    if (!form) return;
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (!supabase) return showStatus('Login is unavailable because Supabase is not connected. Check js/config.js and reload.', 'danger');
       const values = formData(form);
       const { data, error } = await supabase.auth.signInWithPassword({ email: values.email, password: values.password });
       if (error) return showStatus('Invalid email or password.', 'danger');
       const { data: roleRecord } = await supabase.from('roles').select('role').eq('user_id', data.user.id).maybeSingle();
       window.location.href = redirectForRole(roleRecord?.role || 'member');
     });
+    if (!supabase) return;
+    const session = await getSession();
+    if (session.user) return window.location.replace(redirectForRole(session.role));
   }
 
   async function handleLogout() {
