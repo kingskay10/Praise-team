@@ -98,12 +98,21 @@
     if (!form) return;
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (!supabase) return showStatus('Login is unavailable because Supabase is not connected. Check js/config.js and reload.', 'danger');
-      const values = formData(form);
-      const { data, error } = await supabase.auth.signInWithPassword({ email: values.email, password: values.password });
-      if (error) return showStatus('Invalid email or password.', 'danger');
-      const { data: roleRecord } = await supabase.from('roles').select('role').eq('user_id', data.user.id).maybeSingle();
-      window.location.href = redirectForRole(roleRecord?.role || 'member');
+          const submit = form.querySelector('button[type="submit"]');
+          if (submit) submit.disabled = true;
+          try {
+            if (!supabase) return showStatus('Login is unavailable because the Supabase client did not initialize. Check js/config.js and reload.', 'danger');
+            showStatus('Signing in...', 'info');
+            const values = formData(form);
+            const { data, error } = await supabase.auth.signInWithPassword({ email: values.email, password: values.password });
+            if (error) return showStatus(error.message || 'Sign-in failed. Check your email and password.', 'danger');
+            const { data: roleRecord, error: roleError } = await supabase.from('roles').select('role').eq('user_id', data.user.id).maybeSingle();
+            if (roleError) return showStatus('Signed in, but your role could not be loaded. Ask the chair to verify your account role.', 'danger');
+            window.location.href = redirectForRole(roleRecord?.role || 'member');
+          } catch (error) {
+            fail(error, 'Could not reach Supabase during sign-in. Check your connection and retry.');
+          } finally {
+            if (submit) submit.disabled = false;
     });
     if (!supabase) return;
     const session = await getSession();
