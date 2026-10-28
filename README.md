@@ -5,12 +5,13 @@ The active GitHub Pages site is a static HTML/CSS/vanilla JavaScript frontend in
 ## Features found in the original PHP application
 
 - Public home page with today's verse, upcoming/past events, recent updates, published department reports, and FAQs.
-- Email/password login, logout, and role-based dashboard routing for chair, secretary, music director, band/worship director, and member.
+- Email/password login, logout, and role-based dashboard routing for chair, secretary, music director, band/worship director, prayer director, and member.
 - Member-only directory and community photo gallery with likes, comments, replies, sharing, and copy-link actions.
-- Member workspace for profile updates, profile/gallery photo uploads, and daily verse submissions.
+- Member workspace for profile updates and profile/gallery photo uploads.
 - Chair tools for the directory, event creation with poster/attachment, public updates, and approving department reports.
 - Secretary-only finance records for monthly contributions and offerings, plus financial report submission.
 - Music and band director workspaces for department plans and reports.
+- Prayer Director workspace for the verse of the day and daily prayer points.
 - Public search, privacy policy, and terms pages.
 
 ## Supabase setup
@@ -34,14 +35,32 @@ The active GitHub Pages site is a static HTML/CSS/vanilla JavaScript frontend in
    );
    ```
 
-7. Sign in at `docs/login.html`. The chair can edit member profiles and assign roles in the chair dashboard. Create each additional Auth account in **Authentication > Users > Add user** first; it will receive the default member role. Role changes are managed from the chair dashboard.
-8. In **Authentication > Settings**, disable public sign-ups if only chair-provisioned team accounts should be allowed. Create/invite accounts through **Authentication > Users**.
-9. Enable **Authentication > URL Configuration** as needed for your deployed site. Add the GitHub Pages site URL (`https://USERNAME.github.io/REPOSITORY-NAME/`) to the allowed redirect/site URL configuration.
+7. Sign in at `docs/login.html`. The chair can invite members and assign roles from **Manage Members** after deploying the invitation function described below.
+8. In **Authentication > Settings**, disable public sign-ups if only chair-invited team accounts should be allowed. Configure custom SMTP under Authentication settings so invitation emails can be delivered to members.
+9. In **Authentication > URL Configuration**, set the Site URL to `https://USERNAME.github.io/REPOSITORY-NAME` (no trailing slash) and add `https://USERNAME.github.io/REPOSITORY-NAME/**` to the redirect URL allow-list. This permits invitation links to return to `set-password.html`.
 10. Commit and push the project to the `main` branch on GitHub.
 11. In GitHub, open **Settings > Pages > Build and deployment**, choose **Deploy from a branch**, select branch **main** and folder **/docs**, then select **Save**.
 12. After the Pages deployment completes, visit `https://USERNAME.github.io/REPOSITORY-NAME/` (replace both uppercase segments with your GitHub username and repository name).
 
 GitHub Pages is static hosting; it does not execute PHP. The public website uses only the Supabase anon key, and database/storage RLS is the security boundary. The chair's initial role is assigned in Supabase SQL Editor because a browser-only client must not be allowed to self-assign privileged roles.
+
+## Enable Member Invitations and Prayer Director
+
+For the already-created Supabase project, do not rerun the base schema. In the Supabase SQL Editor, run these as two separate queries, in order, and wait for success after each:
+
+1. `supabase/migrations/202610270001_add_prayer_director_role.sql`
+2. `supabase/migrations/202610270002_prayer_points_and_policies.sql`
+
+Deploy the chair invitation function from PowerShell in this repository:
+
+1. Install the Supabase CLI, run `supabase login`, then link the project with `supabase link --project-ref etspiinuvofwwimcuded`.
+2. Set the Pages URL for invitation redirects: `supabase secrets set SITE_URL=https://USERNAME.github.io/REPOSITORY-NAME` (no trailing slash).
+3. Deploy the function with `supabase functions deploy invite-member --project-ref etspiinuvofwwimcuded`.
+4. Commit and push the updated `docs/`, `supabase/`, and README changes, then wait for GitHub Pages to redeploy.
+
+The chair's **Manage Members** tab sends an email invitation, saves the selected role and profile, and directs the invitee to set their own password. They sign in using the email entered by the chair. Configure custom SMTP in Supabase Auth for invitations to arbitrary member addresses. Assign **Prayer Director** through the invitation form or member edit action. The Prayer Director dashboard publishes the daily verse and today's prayer points, which appear on the public homepage for that date.
+
+The Edge Function uses Supabase's server-side `SUPABASE_SERVICE_ROLE_KEY` environment secret. Never put that key in `docs/js/config.js`, other browser code, or a public repository.
 
 ## Data migration and privacy
 
@@ -55,7 +74,7 @@ The inspected legacy config `php-original/config/config.php` reads database sett
 
 ## Features that need an admin-side workaround
 
-- Creating Auth users or resetting credentials cannot be done from the static chair dashboard: create/invite users in Supabase **Authentication > Users**. The chair can edit their profile and role after their first sign-in/profile trigger.
+- Creating Auth users from the chair dashboard requires deploying `supabase/functions/invite-member`; resetting credentials still uses Supabase Auth. The service-role key remains only in the Edge Function environment.
 - The original PHP app includes server-side form/CSRF handling and MySQL password verification. Supabase Auth replaces password handling, and RLS replaces server-side row authorization; the browser never receives a service-role key.
 - Existing MySQL records and account passwords require a separate, trusted migration. The static app does not import private data automatically.
 
