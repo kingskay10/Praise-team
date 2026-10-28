@@ -4,6 +4,19 @@
   const { supabase, escapeHTML: e, roleLabel, showStatus, getSession, signedUrl, uploadFile, escapeQuery } = window.Praise;
   const page = document.body.dataset.page;
   const formData = (form) => Object.fromEntries(new FormData(form).entries());
+
+  // Attaches ONE submit handler to a form. Re-running a page loader replaces the
+  // handler instead of stacking duplicates, and event.currentTarget stays valid
+  // after any await (the real event's currentTarget becomes null).
+  const onSubmit = (id, handler) => {
+    const form = document.getElementById(id);
+    if (!form) return;
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      return handler({ currentTarget: form, preventDefault() {} });
+    };
+  };
+
   const dateTime = (value) => value ? new Date(value).toLocaleString() : 'Not set';
   const dateOnly = (value) => value ? new Date(`${value}T12:00:00`).toLocaleDateString() : 'Not set';
   const localDate = () => {
@@ -98,21 +111,22 @@
     if (!form) return;
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-          const submit = form.querySelector('button[type="submit"]');
-          if (submit) submit.disabled = true;
-          try {
-            if (!supabase) return showStatus('Login is unavailable because the Supabase client did not initialize. Check js/config.js and reload.', 'danger');
-            showStatus('Signing in...', 'info');
-            const values = formData(form);
-            const { data, error } = await supabase.auth.signInWithPassword({ email: values.email, password: values.password });
-            if (error) return showStatus(error.message || 'Sign-in failed. Check your email and password.', 'danger');
-            const { data: roleRecord, error: roleError } = await supabase.from('roles').select('role').eq('user_id', data.user.id).maybeSingle();
-            if (roleError) return showStatus('Signed in, but your role could not be loaded. Ask the chair to verify your account role.', 'danger');
-            window.location.href = redirectForRole(roleRecord?.role || 'member');
-          } catch (error) {
-            fail(error, 'Could not reach Supabase during sign-in. Check your connection and retry.');
-          } finally {
-            if (submit) submit.disabled = false;
+      const submit = form.querySelector('button[type="submit"]');
+      if (submit) submit.disabled = true;
+      try {
+        if (!supabase) return showStatus('Login is unavailable because the Supabase client did not initialize. Check js/config.js and reload.', 'danger');
+        showStatus('Signing in...', 'info');
+        const values = formData(form);
+        const { data, error } = await supabase.auth.signInWithPassword({ email: values.email, password: values.password });
+        if (error) return showStatus(error.message || 'Sign-in failed. Check your email and password.', 'danger');
+        const { data: roleRecord, error: roleError } = await supabase.from('roles').select('role').eq('user_id', data.user.id).maybeSingle();
+        if (roleError) return showStatus('Signed in, but your role could not be loaded. Ask the chair to verify your account role.', 'danger');
+        window.location.href = redirectForRole(roleRecord?.role || 'member');
+      } catch (error) {
+        fail(error, 'Could not reach Supabase during sign-in. Check your connection and retry.');
+      } finally {
+        if (submit) submit.disabled = false;
+      }
     });
     if (!supabase) return;
     const session = await getSession();
@@ -167,7 +181,9 @@
     if (!session) return;
     document.getElementById('profile-form').closest('.card').hidden = true;
     document.getElementById('chair-members').closest('.card').hidden = true;
-    document.querySelector('.dash-header').insertAdjacentHTML('beforeend', '<a class="btn btn-primary" href="chair-members.html">Manage Members</a>');
+    if (!document.querySelector('.dash-header a[href="chair-members.html"]')) {
+      document.querySelector('.dash-header').insertAdjacentHTML('beforeend', '<a class="btn btn-primary" href="chair-members.html">Manage Members</a>');
+    }
     const roleSelect = document.querySelector('#profile-form select[name="role"]');
     if (roleSelect && !roleSelect.querySelector('option[value="prayer_director"]')) {
       roleSelect.add(new Option('Prayer Director', 'prayer_director'));
@@ -201,9 +217,10 @@
       showStatus('Report published.', 'success');
     }));
 
-    document.getElementById('profile-form')?.addEventListener('submit', async (event) => {
+    onSubmit('profile-form', async (event) => {
       event.preventDefault();
-      const values = formData(event.currentTarget);
+      const form = event.currentTarget;
+      const values = formData(form);
       const userId = values.id || null;
       if (!userId) return showStatus('Create the account in Supabase Authentication first, then edit its profile here.', 'info');
       const { role } = values;
@@ -219,11 +236,11 @@
       if (profileError) return fail(profileError);
       const { error: roleError } = await supabase.from('roles').upsert({ user_id: userId, role });
       if (roleError) return fail(roleError);
-      event.currentTarget.reset();
+      form.reset();
       showStatus('Member profile saved.', 'success');
       await loadChair();
     });
-    document.getElementById('event-form')?.addEventListener('submit', async (event) => {
+    onSubmit('event-form', async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
       const values = formData(form);
@@ -253,12 +270,13 @@
       form.reset();
       showStatus('Event created.', 'success');
     });
-    document.getElementById('update-form')?.addEventListener('submit', async (event) => {
+    onSubmit('update-form', async (event) => {
       event.preventDefault();
-      const values = formData(event.currentTarget);
+      const form = event.currentTarget;
+      const values = formData(form);
       const { error } = await supabase.from('updates').insert({ title: values.title, content: values.content, author_id: session.user.id, published_at: new Date().toISOString() });
       if (error) return fail(error);
-      event.currentTarget.reset();
+      form.reset();
       showStatus('Update published.', 'success');
     });
   }
@@ -284,17 +302,18 @@
     };
     try { await renderMembers(); } catch (error) { return fail(error, 'The member list could not be loaded.'); }
 
-    document.getElementById('invite-member-form')?.addEventListener('submit', async (event) => {
+    onSubmit('invite-member-form', async (event) => {
       event.preventDefault();
-      const values = formData(event.currentTarget);
+      const form = event.currentTarget;
+      const values = formData(form);
       const { data, error: inviteError } = await supabase.functions.invoke('invite-member', { body: values });
       if (inviteError) return fail(inviteError, 'Member invitation failed. Confirm the invite function is deployed and configured.');
       if (data?.error) return showStatus(data.error, 'danger');
-      event.currentTarget.reset();
+      form.reset();
       showStatus(data?.message || 'Invitation sent.', 'success');
       try { await renderMembers(); } catch (error) { fail(error); }
     });
-    document.getElementById('edit-member-form')?.addEventListener('submit', async (event) => {
+    onSubmit('edit-member-form', async (event) => {
       event.preventDefault();
       const values = formData(event.currentTarget);
       const { error: profileError } = await supabase.from('profiles').update({
@@ -329,7 +348,7 @@
     const memberSelect = document.getElementById('finance-member');
     memberSelect.innerHTML = '<option value="">Select member</option>' + (membersResult.data || []).map((member) => `<option value="${e(member.id)}">${e(member.name)}</option>`).join('');
     document.getElementById('finance-records').innerHTML = (financeResult.data || []).map((record) => `<tr><td>${e(record.member?.name || 'Member')}</td><td>${e(record.month)}</td><td>$${Number(record.contributions).toFixed(2)}</td><td>$${Number(record.offerings).toFixed(2)}</td><td>${e(record.notes || 'N/A')}</td></tr>`).join('');
-    document.getElementById('finance-form')?.addEventListener('submit', async (event) => {
+    onSubmit('finance-form', async (event) => {
       event.preventDefault();
       const values = formData(event.currentTarget);
       const { error } = await supabase.from('finance_records').upsert({ member_id: values.member_id, month: values.month, contributions: Number(values.contributions), offerings: Number(values.offerings), notes: values.notes || null, recorded_by: session.user.id }, { onConflict: 'member_id,month' });
@@ -341,12 +360,13 @@
   }
 
   function bindReportForm(session, department) {
-    document.getElementById('report-form')?.addEventListener('submit', async (event) => {
+    onSubmit('report-form', async (event) => {
       event.preventDefault();
-      const values = formData(event.currentTarget);
+      const form = event.currentTarget;
+      const values = formData(form);
       const { error } = await supabase.from('department_reports').insert({ department, title: values.title, summary: values.summary, content: values.content, created_by: session.user.id, status: 'pending', published: false });
       if (error) return fail(error);
-      event.currentTarget.reset();
+      form.reset();
       showStatus('Report submitted to the chair for approval.', 'success');
     });
   }
@@ -357,12 +377,13 @@
     const { data, error } = await supabase.from('department_music').select('*').order('rehearsal_date', { ascending: false }).order('created_at', { ascending: false });
     if (error) fail(error);
     document.getElementById('music-plans').innerHTML = (data || []).map((plan) => `<tr><td>${e(plan.title)}</td><td>${e(dateTime(plan.rehearsal_date))}</td><td>${e(plan.notes || 'N/A')}</td></tr>`).join('');
-    document.getElementById('music-form')?.addEventListener('submit', async (event) => {
+    onSubmit('music-form', async (event) => {
       event.preventDefault();
-      const values = formData(event.currentTarget);
+      const form = event.currentTarget;
+      const values = formData(form);
       const { error: saveError } = await supabase.from('department_music').insert({ title: values.title, notes: values.notes || null, rehearsal_date: values.rehearsal_date ? new Date(values.rehearsal_date).toISOString() : null, created_by: session.user.id });
       if (saveError) return fail(saveError);
-      event.currentTarget.reset();
+      form.reset();
       showStatus('Music plan saved.', 'success');
       await loadMusicDirector();
     });
@@ -375,12 +396,13 @@
     const { data, error } = await supabase.from('department_band').select('*').order('created_at', { ascending: false });
     if (error) fail(error);
     document.getElementById('band-plans').innerHTML = (data || []).map((plan) => `<tr><td>${e(plan.title)}</td><td>${e(plan.assignments || 'N/A')}</td><td>${e(plan.equipment || 'N/A')}</td><td>${e(plan.schedule_notes || 'N/A')}</td></tr>`).join('');
-    document.getElementById('band-form')?.addEventListener('submit', async (event) => {
+    onSubmit('band-form', async (event) => {
       event.preventDefault();
-      const values = formData(event.currentTarget);
+      const form = event.currentTarget;
+      const values = formData(form);
       const { error: saveError } = await supabase.from('department_band').insert({ title: values.title, assignments: values.assignments || null, equipment: values.equipment || null, schedule_notes: values.schedule_notes || null, created_by: session.user.id });
       if (saveError) return fail(saveError);
-      event.currentTarget.reset();
+      form.reset();
       showStatus('Band plan saved.', 'success');
       await loadBandDirector();
     });
@@ -395,7 +417,7 @@
     const memberVerseForm = document.getElementById('verse-form');
     if (memberVerseForm) {
       memberVerseForm.hidden = true;
-      memberVerseForm.previousElementSibling.hidden = true;
+      if (memberVerseForm.previousElementSibling) memberVerseForm.previousElementSibling.hidden = true;
     }
     const form = document.getElementById('profile-edit-form');
     for (const key of ['name', 'position', 'phone', 'location', 'social_media', 'marital_status']) form.elements[key].value = profile[key] || '';
@@ -409,9 +431,10 @@
       showStatus('Profile saved.', 'success');
       document.querySelector('#profile-view p strong').textContent = values.name;
     });
-    document.getElementById('profile-photo-form')?.addEventListener('submit', async (event) => {
+    onSubmit('profile-photo-form', async (event) => {
       event.preventDefault();
       const file = event.currentTarget.elements.photo.files[0];
+      if (!file) return showStatus('Choose a photo first.', 'danger');
       const uploaded = await uploadFile('member-media', file, session.user.id, 'profile');
       if (uploaded.error) return showStatus(uploaded.error, 'danger');
       const { error: saveError } = await supabase.from('profiles').update({ photo_path: uploaded.path }).eq('id', session.user.id);
@@ -438,9 +461,11 @@
     }));
     document.getElementById('personal-photos').innerHTML = photoMarkup.join('') || '<p class="empty-state">No extra photos uploaded yet.</p>';
 
-    document.getElementById('member-gallery-form')?.addEventListener('submit', async (event) => {
+    onSubmit('member-gallery-form', async (event) => {
       event.preventDefault();
-      const file = event.currentTarget.elements.photo.files[0];
+      const form = event.currentTarget;
+      const file = form.elements.photo.files[0];
+      if (!file) return showStatus('Choose a photo first.', 'danger');
       const uploaded = await uploadFile('member-media', file, session.user.id, 'gallery');
       if (uploaded.error) return showStatus(uploaded.error, 'danger');
       const { error: photoError } = await supabase.from('member_photos').insert({ user_id: session.user.id, image_path: uploaded.path });
@@ -448,7 +473,7 @@
       const { error: galleryError } = await supabase.from('gallery_photos').insert({ uploader_id: session.user.id, source_type: 'member', source_id: session.user.id, image_path: uploaded.path, caption: 'Member photo' });
       if (galleryError) return fail(galleryError);
       showStatus('Photo added to your gallery.', 'success');
-      event.currentTarget.reset();
+      form.reset();
       const photoUrl = await signedUrl('member-media', uploaded.path);
       const photoItem = document.createElement('div');
       photoItem.className = 'gallery-item';
@@ -472,9 +497,10 @@
     verseTarget.textContent = verseResult.data?.verse_text || 'No verse has been published for today.';
     pointTarget.innerHTML = (pointsResult.data || []).map((item) => `<li>${e(item.prayer_point)}</li>`).join('') || '<li class="empty-state">No prayer points added yet.</li>';
 
-    document.getElementById('prayer-verse-form')?.addEventListener('submit', async (event) => {
+    onSubmit('prayer-verse-form', async (event) => {
       event.preventDefault();
-      const values = formData(event.currentTarget);
+      const form = event.currentTarget;
+      const values = formData(form);
       const existing = await supabase.from('daily_verses').select('id').eq('posted_on', today).limit(1).maybeSingle();
       if (existing.error) return fail(existing.error);
       const result = existing.data
@@ -482,18 +508,19 @@
         : await supabase.from('daily_verses').insert({ member_id: session.user.id, verse_text: values.verse_text, posted_on: today });
       if (result.error) return fail(result.error);
       verseTarget.textContent = values.verse_text;
-      event.currentTarget.reset();
-      showStatus('Today's verse has been published.', 'success');
+      form.reset();
+      showStatus("Today's verse has been published.", 'success');
     });
-    document.getElementById('prayer-point-form')?.addEventListener('submit', async (event) => {
+    onSubmit('prayer-point-form', async (event) => {
       event.preventDefault();
-      const values = formData(event.currentTarget);
+      const form = event.currentTarget;
+      const values = formData(form);
       const { data, error } = await supabase.from('daily_prayer_points').insert({ prayer_point: values.prayer_point, prayer_date: today, created_by: session.user.id }).select('id,prayer_point').single();
       if (error) return fail(error);
       const item = document.createElement('li');
       item.textContent = data.prayer_point;
       pointTarget.prepend(item);
-      event.currentTarget.reset();
+      form.reset();
       showStatus('Prayer point added.', 'success');
     });
   }
@@ -517,7 +544,6 @@
     const likes = likesResult.data || [];
     const comments = commentsResult.data || [];
     const commentLikes = commentLikesResult.data || [];
-    window.__commentLikes = commentLikes.filter((like) => like.user_id === session.user.id).map((like) => like.comment_id);
     const commentAuthors = await profileNameMap(comments.map((comment) => comment.user_id));
     const cards = await Promise.all(photos.map(async (photo) => {
       const url = await signedUrl(photo.source_type === 'event' ? 'event-media' : 'member-media', photo.image_path);
@@ -528,9 +554,9 @@
     }));
     target.innerHTML = cards.join('');
     const bindToggle = async (table, key, button) => {
-      const exists = await supabase.from(table).select('id').eq(key, button.dataset[key === 'photo_id' ? 'likePhoto' : 'likeComment']).eq('user_id', session.user.id).maybeSingle();
-      if (exists.error) return fail(exists.error);
       const id = button.dataset[key === 'photo_id' ? 'likePhoto' : 'likeComment'];
+      const exists = await supabase.from(table).select('id').eq(key, id).eq('user_id', session.user.id).maybeSingle();
+      if (exists.error) return fail(exists.error);
       const result = exists.data
         ? await supabase.from(table).delete().eq('id', exists.data.id)
         : await supabase.from(table).insert({ [key]: id, user_id: session.user.id });
@@ -565,6 +591,7 @@
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const file = form.elements.photo.files[0];
+      if (!file) return showStatus('Choose a photo first.', 'danger');
       const uploaded = await uploadFile('member-media', file, session.user.id, 'gallery');
       if (uploaded.error) return showStatus(uploaded.error, 'danger');
       const { error } = await supabase.from('gallery_photos').insert({ uploader_id: session.user.id, source_type: 'member', source_id: session.user.id, image_path: uploaded.path, caption: form.elements.caption.value.trim() || null });
@@ -586,7 +613,7 @@
       const pattern = `%${value}%`;
       const [events, updates, reports] = await Promise.all([
         supabase.from('events_public').select('title,description,event_date').or(`title.ilike.${pattern},description.ilike.${pattern}`).limit(30),
-        supabase.from('updates').select('title,content,published_at').not('published_at', 'is', null).or(`title.ilike.${pattern},content.ilike.${pattern}`).limit(30),
+        supabase.from('updates_public').select('title,content,published_at').or(`title.ilike.${pattern},content.ilike.${pattern}`).limit(30),
         supabase.from('department_reports_public').select('title,summary,published_at').or(`title.ilike.${pattern},summary.ilike.${pattern}`).limit(30)
       ]);
       for (const result of [events, updates, reports]) if (result.error) fail(result.error);
