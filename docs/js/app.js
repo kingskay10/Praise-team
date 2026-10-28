@@ -113,7 +113,6 @@
             fail(error, 'Could not reach Supabase during sign-in. Check your connection and retry.');
           } finally {
             if (submit) submit.disabled = false;
-          }
     });
     if (!supabase) return;
     const session = await getSession();
